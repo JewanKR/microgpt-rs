@@ -6,7 +6,7 @@
 //! @karpathy
 //! ```
 
-use std::{cell::Cell, collections::{HashMap, HashSet}, fs, io::Write, iter::{Sum, once}, ops::{Add, Div, Mul, Neg, Sub}, path, rc::Rc};
+use std::{cell::Cell, collections::{HashMap, HashSet}, fs, iter::{Sum, once, repeat_with}, ops::{Add, Div, Mul, Neg, Sub}, rc::Rc};
 use rand::{SeedableRng, rngs::StdRng, seq::SliceRandom};
 use rand_distr::{Distribution, Normal, weighted::WeightedIndex};
 
@@ -14,11 +14,11 @@ use rand_distr::{Distribution, Normal, weighted::WeightedIndex};
 // I used a macro to mirror Python's flexible arithmetic without sacrificing performance.
 macro_rules! impl_value {
     ($t:ident, $m:ident, $op:tt) => {
-        impl $t<f64> for Value {        // [porter's note] Value + f64
+        impl $t<f32> for Value {        // [porter's note] Value + f32
             type Output = Value;
-            fn $m(self, rhs: f64) -> Self::Output { self $op Self::from(rhs) }
+            fn $m(self, rhs: f32) -> Self::Output { self $op Self::from(rhs) }
         }
-        impl $t<Value> for f64 {        // [porter's note] f64 + Value
+        impl $t<Value> for f32 {        // [porter's note] f32 + Value
             type Output = Value;
             fn $m(self, rhs: Value) -> Self::Output { Value::from(self) $op rhs }
         }
@@ -29,13 +29,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut random = StdRng::seed_from_u64(42);
 
     // Let there be a Dataset `docs`: Vec<String> of documents (e.g. a list of names)
-    if !path::Path::new("./input.txt").exists() {
-        let names_url: &str = "https://raw.githubusercontent.com/karpathy/makemore/refs/heads/master/names.txt";
-        let response = reqwest::blocking::get(names_url)?.text()?;
-        fs::File::create("./input.txt")?.write_all(response.as_bytes())?;
-    };
-    let mut docs: Vec<String> = std::fs::read_to_string("./input.txt")? // Vec<String> of documents
-        .lines().map(|l| l.trim()).filter(|l| !l.is_empty()).map(|s| s.to_string()).collect();
+    let mut docs: Vec<String> = fs::read_to_string("./input.txt")?.split_whitespace().map(|s| s.to_string()).collect(); // Vec<String> of documents
     docs.shuffle(&mut random);
     println!("num docs: {}", docs.len());
 
@@ -50,9 +44,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Let there be Autograd to recursively apply the chain rule through a computation graph
     #[derive(Clone)]
     struct Value(Rc<ValueSlots>); // Rust optimization for memory usage
-    struct ValueSlots { data: Cell<f64>, grad: Cell<f64>, children: Vec<Value>, local_grads: Vec<f64> }
+    struct ValueSlots { data: Cell<f32>, grad: Cell<f32>, children: Vec<Value>, local_grads: Vec<f32> }
     impl Value {
-        fn init(data: f64, children: Vec<Value>, local_grads: Vec<f64>) -> Self {
+        fn init(data: f32, children: Vec<Value>, local_grads: Vec<f32>) -> Self {
             Self(Rc::new(ValueSlots {
                 data: Cell::new(data),      // scalar value of this node calculated during forward pass
                 grad: Cell::new(0.0),       // derivative of the loss w.r.t. this node, calculated in backward pass
@@ -61,8 +55,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             } ))
         }
     }
-    impl From<f64> for Value {
-        fn from(value: f64) -> Self { Self::init(value, Vec::new(), Vec::new()) }
+    impl From<f32> for Value {
+        fn from(value: f32) -> Self { Self::init(value, Vec::new(), Vec::new()) }
     }
     impl Add for Value {
         type Output = Self;
@@ -80,7 +74,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     impl_value!(Mul, mul, *);   // [porter's note] add bidirectional operations
     impl Value {
-        pub fn powf(self, rhs: f64) -> Self {
+        pub fn powf(self, rhs: f32) -> Self {
             Self::init(self.0.data.get().powf(rhs), vec![self.clone()], vec![rhs * self.0.data.get().powf(rhs - 1.0)])
         }
         pub fn ln(self) -> Self {
@@ -133,9 +127,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     const N_HEAD: usize = 4;      // number of attention heads
     const HEAD_DIM: usize = N_EMBD / N_HEAD; // derived dimension of each head
     type Matrix = Vec<Vec<Value>>;
-    fn matrix(nout: usize, nin: usize, std: f64, random: &mut StdRng) -> Matrix {
+    fn matrix(nout: usize, nin: usize, std: f32, random: &mut StdRng) -> Matrix {
         let normal = Normal::new(0.0, std).unwrap();
-        (0..nout).map(|_| { (0..nin).map(|_| Value::from(normal.sample(random))).collect() }).collect()
+        repeat_with(|| repeat_with(|| Value::from(normal.sample(random))).take(nin).collect()).take(nout).collect()
     }
     struct StateDict { wte: Matrix, wpe: Matrix, lm_head: Matrix, layers: Vec<SDLayer> }
     struct SDLayer { attn_wq: Matrix, attn_wk: Matrix, attn_wv: Matrix, attn_wo: Matrix, mlp_fc1: Matrix, mlp_fc2: Matrix }
@@ -143,29 +137,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         wte: matrix(vocab_size, N_EMBD, 0.08, &mut random),
         wpe: matrix(BLOCK_SIZE, N_EMBD, 0.08, &mut random),
         lm_head: matrix(vocab_size, N_EMBD, 0.08, &mut random),
-        layers: (0..N_LAYER).map(|_| SDLayer {
+        layers: repeat_with(|| SDLayer {
             attn_wq: matrix(N_EMBD, N_EMBD, 0.08, &mut random),
             attn_wk: matrix(N_EMBD, N_EMBD, 0.08, &mut random),
             attn_wv: matrix(N_EMBD, N_EMBD, 0.08, &mut random),
             attn_wo: matrix(N_EMBD, N_EMBD, 0.08, &mut random),
             mlp_fc1: matrix(4 * N_EMBD, N_EMBD, 0.08, &mut random),
             mlp_fc2: matrix(N_EMBD, 4 * N_EMBD, 0.08, &mut random),
-        } ).collect()
+        }).take(N_LAYER).collect()
     };
     impl StateDict {
         fn flatten_ref(&self) -> Vec<Value> {
-            let mut output = Vec::new();
-            let mut flatten = |mat: &Matrix| { output.extend(mat.iter().flatten().cloned()); };
-            flatten(&self.wte); flatten(&self.wpe); flatten(&self.lm_head);
+            let mut list = Vec::new();
+            let mut row = |mat: &Matrix| list.extend(mat.iter().flatten().cloned());
+            row(&self.wte); row(&self.wpe); row(&self.lm_head);
             for li in &self.layers {
-                flatten(&li.attn_wq);
-                flatten(&li.attn_wk);
-                flatten(&li.attn_wv);
-                flatten(&li.attn_wo);
-                flatten(&li.mlp_fc1);
-                flatten(&li.mlp_fc2);
+                row(&li.attn_wq); row(&li.attn_wk); row(&li.attn_wv); row(&li.attn_wo); row(&li.mlp_fc1); row(&li.mlp_fc2);
             }
-            output
+            list
         }
     }
     let params: Vec<Value> = state_dict.flatten_ref(); // flatten params into a single Vec<Value>
@@ -185,7 +174,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     fn rmsnorm(x: &[Value]) -> Vec<Value> {
-        let ms = x.iter().cloned().map(|xi| xi.clone() * xi).sum::<Value>() / Value::from(x.len() as f64);
+        let ms = x.iter().cloned().map(|xi| xi.clone() * xi).sum::<Value>() / Value::from(x.len() as f32);
         let scale = (ms + 1e-5).powf(-0.5);
         x.iter().cloned().map(|xi| xi * scale.clone()).collect()
     }
@@ -213,7 +202,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     let k_h: Matrix = keys_li.iter().map(|ki| ki[hs..hs+HEAD_DIM].to_vec()).collect();
                     let v_h: Matrix = valuse_li.iter().map(|vi| vi[hs..hs+HEAD_DIM].to_vec()).collect();
                     let attn_logits: Vec<Value> = k_h.into_iter().map(|k_ht| k_ht.into_iter().zip(q_h.iter())
-                        .map(|(k_htj, q_hj)| q_hj.clone() * k_htj).sum::<Value>() / (HEAD_DIM as f64).powf(0.5))
+                        .map(|(k_htj, q_hj)| q_hj.clone() * k_htj).sum::<Value>() / (HEAD_DIM as f32).powf(0.5))
                         .collect();
                     let attn_weights: Vec<Value> = softmax(&attn_logits);
                     let head_out: Vec<Value> = v_h.into_iter().map(|v_ht| v_ht.into_iter().zip(attn_weights.iter().cloned())
@@ -258,18 +247,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let loss_t = -probs[target_id].clone().ln();
             losses.push(loss_t);
         }
-        let loss: Value = (1.0 / n as f64) * (losses.into_iter().sum::<Value>()); // final average loss over the document sequence. May yours be low.
+        let loss: Value = (1.0 / n as f32) * (losses.into_iter().sum::<Value>()); // final average loss over the document sequence. May yours be low.
 
         // Backward the loss, calculating the gradients with respect to all model parameters
         loss.backward();
 
         // Adam optimizer update: update the model parameters based on the corresponding gradients
-        let lr_t = learning_rate * (1.0 - step as f64 / num_steps as f64); // linear learning rate decay
+        let lr_t = learning_rate * (1.0 - step as f32 / num_steps as f32); // linear learning rate decay
         for (p,(mi, vi)) in params.iter().zip(m.iter_mut().zip(v.iter_mut())) {
             *mi = beta1 * *mi + (1.0 - beta1) * p.0.grad.get();
             *vi = beta2 * *vi + (1.0 - beta2) * p.0.grad.get().powf(2.0);
-            let m_hat = *mi / (1.0 - beta1.powf(step as f64 + 1.0));
-            let v_hat = *vi / (1.0 - beta2.powf(step as f64 + 1.0));
+            let m_hat = *mi / (1.0 - beta1.powf(step as f32 + 1.0));
+            let v_hat = *vi / (1.0 - beta2.powf(step as f32 + 1.0));
             p.0.data.set(p.0.data.get() - (lr_t * m_hat / (v_hat.powf(0.5) + eps_adam)));
             p.0.grad.set(0.0);
         }
@@ -286,7 +275,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         for pos_id in 0..BLOCK_SIZE {
             let logits: Vec<Value> = state_dict.gpt(token_id, pos_id, &mut keys, &mut values);
             let probs: Vec<Value> = softmax(&logits.into_iter().map(|l| l / temperature).collect::<Vec<Value>>());
-            token_id = WeightedIndex::new(&probs.into_iter().map(|p| p.0.data.get()).collect::<Vec<f64>>())?.sample(&mut random);
+            token_id = WeightedIndex::new(&probs.into_iter().map(|p| p.0.data.get()).collect::<Vec<f32>>())?.sample(&mut random);
             if token_id == bos {break;}
             sample.push(uchars.get(token_id).copied().unwrap_or('?'));
         }
