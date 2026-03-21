@@ -6,7 +6,7 @@
 //! @karpathy
 //! ```
 
-use std::{cell::Cell, collections::{HashMap, HashSet}, fs, iter::{Sum, once, repeat_with}, ops::{Add, Div, Mul, Neg, Sub}, rc::Rc};
+use std::{cell::Cell, collections::{HashMap, HashSet}, fs, iter::{Sum, once}, ops::{Add, Div, Mul, Neg, Sub}, rc::Rc};
 use rand::{SeedableRng, rngs::StdRng, seq::SliceRandom};
 use rand_distr::{Distribution, Normal, weighted::WeightedIndex};
 
@@ -129,7 +129,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     type Matrix = Vec<Vec<Value>>;
     fn matrix(nout: usize, nin: usize, std: f32, random: &mut StdRng) -> Matrix {
         let normal = Normal::new(0.0, std).unwrap();
-        repeat_with(|| repeat_with(|| Value::from(normal.sample(random))).take(nin).collect()).take(nout).collect()
+        (0..nout).map(|_| (0..nin).map(|_| Value::from(normal.sample(random))).collect()).collect()
     }
     struct StateDict { wte: Matrix, wpe: Matrix, lm_head: Matrix, layers: Vec<SDLayer> }
     struct SDLayer { attn_wq: Matrix, attn_wk: Matrix, attn_wv: Matrix, attn_wo: Matrix, mlp_fc1: Matrix, mlp_fc2: Matrix }
@@ -137,14 +137,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         wte: matrix(vocab_size, N_EMBD, 0.08, &mut random),
         wpe: matrix(BLOCK_SIZE, N_EMBD, 0.08, &mut random),
         lm_head: matrix(vocab_size, N_EMBD, 0.08, &mut random),
-        layers: repeat_with(|| SDLayer {
+        layers: (0..N_LAYER).map(|_| SDLayer {
             attn_wq: matrix(N_EMBD, N_EMBD, 0.08, &mut random),
             attn_wk: matrix(N_EMBD, N_EMBD, 0.08, &mut random),
             attn_wv: matrix(N_EMBD, N_EMBD, 0.08, &mut random),
             attn_wo: matrix(N_EMBD, N_EMBD, 0.08, &mut random),
             mlp_fc1: matrix(4 * N_EMBD, N_EMBD, 0.08, &mut random),
             mlp_fc2: matrix(N_EMBD, 4 * N_EMBD, 0.08, &mut random),
-        }).take(N_LAYER).collect()
+        }).collect()
     };
     impl StateDict {
         fn flatten_ref(&self) -> Vec<Value> {
